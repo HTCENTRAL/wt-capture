@@ -113,7 +113,7 @@ button {
 }
 
 /* ランドスケープ時は横並び */
-@media (orientation: landscape) {
+@media (orientation: landscape) and (min-width: 600px) {
   .exercise-buttons {
     flex-direction: row;
     max-width: 100%;
@@ -265,19 +265,4 @@ button {
   display: none !important;
 }
 
-/* ポートレート警告 */
-@media (orientation: portrait) {
-  #screen-camera::after {
-    content: '横向きにしてください';
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.75);
-    color: #fff;
-    font-size: 20px;
-    font-weight: 600;
-    z-index: 100;
-  }
-}
+/* 縦・横どちらでも使用可能 */
