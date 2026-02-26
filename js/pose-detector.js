@@ -1,13 +1,11 @@
 /**
- * pose-detector.js
- * MoveNet SINGLEPOSE_LIGHTNING ラッパー
+ * pose-detector.js - MoveNet ラッパー
  */
-const PoseDetector = (() => {
+var PoseDetector = (function () {
 
-  let detector = null;
+  var detector = null;
 
-  // キーポイントインデックス定数
-  const KP = {
+  var KP = {
     NOSE: 0,
     LEFT_EYE: 1,   RIGHT_EYE: 2,
     LEFT_EAR: 3,   RIGHT_EAR: 4,
@@ -16,58 +14,46 @@ const PoseDetector = (() => {
     LEFT_WRIST: 9,     RIGHT_WRIST: 10,
     LEFT_HIP: 11,      RIGHT_HIP: 12,
     LEFT_KNEE: 13,     RIGHT_KNEE: 14,
-    LEFT_ANKLE: 15,    RIGHT_ANKLE: 16,
+    LEFT_ANKLE: 15,    RIGHT_ANKLE: 16
   };
 
-  /**
-   * モデルを初期化する
-   * @param {Function} onStatus - ステータス文字列を受け取るコールバック
-   */
-  async function init(onStatus) {
-    try {
-      onStatus('WebGLバックエンド初期化中...');
-      await tf.setBackend('webgl');
-      await tf.ready();
+  function init(onStatus) {
+    return new Promise(function (resolve) {
+      onStatus('WebGL初期化中...');
 
-      onStatus('MoveNetモデル読み込み中...');
-      detector = await poseDetection.createDetector(
-        poseDetection.SupportedModels.MoveNet,
-        {
-          // LIGHTNING: 最軽量・最速（モバイル向け）
-          modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
-        }
-      );
-
-      onStatus('準備完了');
-      return true;
-    } catch (err) {
-      onStatus(`エラー: ${err.message}`);
-      console.error('PoseDetector init error:', err);
-      return false;
-    }
+      tf.setBackend('webgl')
+        .then(function () { return tf.ready(); })
+        .then(function () {
+          onStatus('MoveNetモデル読み込み中...');
+          return poseDetection.createDetector(
+            poseDetection.SupportedModels.MoveNet,
+            { modelType: 'SinglePose.Lightning' }
+          );
+        })
+        .then(function (d) {
+          detector = d;
+          onStatus('モデル準備完了');
+          resolve(true);
+        })
+        .catch(function (e) {
+          console.error('PoseDetector error:', e);
+          onStatus('モデルエラー: ' + e.message);
+          resolve(false);
+        });
+    });
   }
 
-  /**
-   * ビデオ要素から姿勢を推定する
-   * @param {HTMLVideoElement} videoEl
-   * @returns {Array|null} 17要素のキーポイント配列、検出できない場合はnull
-   */
-  async function detect(videoEl) {
-    if (!detector) return null;
-    // ビデオがまだ準備できていない場合はスキップ
-    if (videoEl.readyState < 2) return null;
+  function detect(videoEl) {
+    if (!detector) return Promise.resolve(null);
+    if (videoEl.readyState < 2) return Promise.resolve(null);
 
-    try {
-      const poses = await detector.estimatePoses(videoEl, {
-        flipHorizontal: false,
-      });
-      if (!poses || poses.length === 0) return null;
-      return poses[0].keypoints;
-    } catch (err) {
-      // 検出エラーは静かに無視（フレーム単位の失敗は正常）
-      return null;
-    }
+    return detector.estimatePoses(videoEl, { flipHorizontal: false })
+      .then(function (poses) {
+        if (!poses || poses.length === 0) return null;
+        return poses[0].keypoints;
+      })
+      .catch(function () { return null; });
   }
 
-  return { init, detect, KP };
-})();
+  return { init: init, detect: detect, KP: KP };
+}());

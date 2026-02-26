@@ -1,8 +1,7 @@
 /**
- * app.js
- * アプリ全体の制御・カメラ初期化・アニメーションループ
+ * app.js - メインコントローラー
  */
-(async () => {
+(function () {
 
   // ---- DOM参照 ----
   const video         = document.getElementById('video');
@@ -17,100 +16,122 @@
   const btnBack       = document.getElementById('btn-back');
 
   // ---- 状態 ----
-  let currentExercise = null;
-  let animationId     = null;
-  let isModelReady    = false;
-  let frameCount      = 0;
-  let lastKeypoints   = null;
+  var currentExercise = null;
+  var animationId     = null;
+  var isModelReady    = false;
+  var frameCount      = 0;
+  var lastKeypoints   = null;
+  var cameraStarted   = false;
 
-  // ---- Canvasをスクリーンにフィット（縦横比を保持・黒帯あり）----
+  // ---- ステータス表示 ----
+  function setStatus(msg) {
+    modelStatus.textContent = msg;
+    console.log('[App]', msg);
+  }
+
+  // ---- Canvasをスクリーンに合わせる ----
   function fitCanvas() {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    if (!canvas.width || !canvas.height) return;
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    var cw = canvas.width;
+    var ch = canvas.height;
+    if (!cw || !ch) return;
 
-    const videoAspect  = canvas.width / canvas.height;
-    const screenAspect = vw / vh;
+    var videoRatio  = cw / ch;
+    var screenRatio = vw / vh;
+    var w, h;
 
-    let w, h;
-    if (screenAspect > videoAspect) {
-      // 画面の方が横長 → 高さに合わせる
-      h = vh;
-      w = vh * videoAspect;
+    if (screenRatio > videoRatio) {
+      h = vh; w = vh * videoRatio;
     } else {
-      // 画面の方が縦長 → 幅に合わせる
-      w = vw;
-      h = vw / videoAspect;
+      w = vw; h = vw / videoRatio;
     }
 
-    canvas.style.width  = w + 'px';
-    canvas.style.height = h + 'px';
-    canvas.style.left   = ((vw - w) / 2) + 'px';
-    canvas.style.top    = ((vh - h) / 2) + 'px';
+    canvas.style.width  = Math.round(w) + 'px';
+    canvas.style.height = Math.round(h) + 'px';
+    canvas.style.left   = Math.round((vw - w) / 2) + 'px';
+    canvas.style.top    = Math.round((vh - h) / 2) + 'px';
   }
 
   window.addEventListener('resize', fitCanvas);
-  window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 300));
+  window.addEventListener('orientationchange', function () {
+    setTimeout(fitCanvas, 400);
+  });
 
-  // ---- カメラ初期化 ----
-  async function startCamera() {
-    const constraints = {
-      video: {
-        facingMode: { ideal: 'environment' },
-        width:  { ideal: 1280, max: 1280 },
-        height: { ideal: 720,  max: 720  },
-        frameRate: { ideal: 30 },
-      },
-      audio: false,
-    };
+  // ---- カメラ起動 ----
+  function startCamera() {
+    return new Promise(function (resolve) {
+      setStatus('カメラ起動中...');
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      video.srcObject = stream;
+      var constraints = {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width:  { ideal: 1280, max: 1280 },
+          height: { ideal: 720,  max: 720  },
+          frameRate: { ideal: 30 }
+        },
+        audio: false
+      };
 
-      await new Promise((resolve, reject) => {
-        video.onloadedmetadata = resolve;
-        video.onerror = reject;
-      });
-      await video.play();
-
-      // Canvas内部解像度をビデオに合わせる
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
-      fitCanvas();
-
-      return true;
-    } catch (err) {
-      const msg = err.name === 'NotAllowedError'
-        ? 'カメラを許可してください\nSafari設定 > カメラ'
-        : `カメラエラー: ${err.message}`;
-      modelStatus.textContent = msg;
-      return false;
-    }
+      navigator.mediaDevices.getUserMedia(constraints)
+        .then(function (stream) {
+          video.srcObject = stream;
+          video.onloadedmetadata = function () {
+            video.play()
+              .then(function () {
+                canvas.width  = video.videoWidth  || 1280;
+                canvas.height = video.videoHeight || 720;
+                fitCanvas();
+                cameraStarted = true;
+                resolve(true);
+              })
+              .catch(function (e) {
+                setStatus('カメラ再生エラー: ' + e.message);
+                resolve(false);
+              });
+          };
+          video.onerror = function () {
+            setStatus('カメラ映像エラー');
+            resolve(false);
+          };
+        })
+        .catch(function (e) {
+          if (e.name === 'NotAllowedError') {
+            setStatus('カメラを許可してください（設定 > Safari > カメラ）');
+          } else if (e.name === 'NotFoundError') {
+            setStatus('カメラが見つかりません');
+          } else {
+            setStatus('カメラエラー: ' + e.name);
+          }
+          resolve(false);
+        });
+    });
   }
 
   // ---- カメラ停止 ----
   function stopCamera() {
     if (video.srcObject) {
-      video.srcObject.getTracks().forEach(t => t.stop());
+      video.srcObject.getTracks().forEach(function (t) { t.stop(); });
       video.srcObject = null;
     }
+    cameraStarted = false;
   }
 
   // ---- アニメーションループ ----
-  // カメラ映像はモデル不要で即表示。モデルが準備できたら骨格を重ねる。
-  function animationLoop() {
-    animationId = requestAnimationFrame(animationLoop);
+  function loop() {
+    animationId = requestAnimationFrame(loop);
 
-    // モデル準備済みのときだけ推論（3フレームに1回）
+    if (!cameraStarted) return;
+
+    // 3フレームに1回だけ推論
     if (isModelReady && frameCount % 3 === 0) {
-      PoseDetector.detect(video).then(kps => {
+      PoseDetector.detect(video).then(function (kps) {
         lastKeypoints = kps;
       });
     }
     frameCount++;
 
-    const angles = (isModelReady && lastKeypoints)
+    var angles = (isModelReady && lastKeypoints)
       ? AngleCalculator.getAngles(lastKeypoints, currentExercise)
       : null;
 
@@ -126,53 +147,71 @@
   function showScreen(name) {
     screenSelect.classList.remove('active');
     screenCamera.classList.remove('active');
-    if (name === 'select') screenSelect.classList.add('active');
-    if (name === 'camera') screenCamera.classList.add('active');
+    document.getElementById('screen-' + name).classList.add('active');
   }
 
-  // ---- エクササイズボタン ----
-  const EXERCISE_NAMES = {
+  // ---- エクササイズ名 ----
+  var NAMES = {
     squat:     'スクワット',
     deadlift:  'デッドリフト',
-    bulgarian: 'ブルガリアンスクワット',
+    bulgarian: 'ブルガリアンスクワット'
   };
 
-  document.querySelectorAll('.btn-exercise').forEach(btn => {
-    btn.addEventListener('click', async () => {
+  // ---- エクササイズボタン ----
+  document.querySelectorAll('.btn-exercise').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+
       currentExercise = btn.dataset.exercise;
-      exerciseLabel.textContent = EXERCISE_NAMES[currentExercise];
+      exerciseLabel.textContent = NAMES[currentExercise];
       frameCount    = 0;
       lastKeypoints = null;
+
+      // カメラ画面に切り替え
       showScreen('camera');
 
-      // ── Step1: カメラを先に起動 ──
-      modelStatus.textContent = 'カメラ起動中...';
-      const cameraOk = await startCamera();
+      // ボタンをすぐ「起動中」状態で表示（常に見える）
+      btnRecord.textContent = '起動中';
+      btnRecord.disabled    = true;
+      btnRecord.className   = 'loading';
 
-      if (!cameraOk) return; // カメラ失敗 → ここで止まる
+      // カメラを起動
+      startCamera().then(function (ok) {
+        if (!ok) {
+          // カメラ失敗 → ボタンを「エラー」表示（押せないが見える）
+          btnRecord.textContent = 'エラー';
+          btnRecord.disabled    = true;
+          btnRecord.className   = '';
+          return;
+        }
 
-      // カメラOK → すぐにループ開始・RECボタン有効化
-      animationLoop();
-      btnRecord.disabled = false;
+        // カメラOK → RECボタン有効化
+        loop();
+        btnRecord.textContent = 'REC';
+        btnRecord.disabled    = false;
+        btnRecord.className   = '';
 
-      // ── Step2: モデルをバックグラウンドで読み込む ──
-      if (!isModelReady) {
-        modelStatus.textContent = 'AI読み込み中...';
-        const ok = await PoseDetector.init(msg => {
-          modelStatus.textContent = msg;
-        });
-        isModelReady = ok;
-        modelStatus.textContent = ok ? '準備完了' : 'AI読み込み失敗（録画のみ可）';
-      } else {
-        modelStatus.textContent = '準備完了';
-      }
+        // AIモデルをバックグラウンドで読み込み（RECには影響しない）
+        if (!isModelReady) {
+          setStatus('AI読み込み中...');
+          PoseDetector.init(function (msg) { setStatus(msg); })
+            .then(function (ok2) {
+              isModelReady = ok2;
+              setStatus(ok2 ? '準備完了（骨格表示ON）' : '録画のみ（骨格なし）');
+            })
+            .catch(function () {
+              setStatus('録画のみ（骨格なし）');
+            });
+        } else {
+          setStatus('準備完了（骨格表示ON）');
+        }
+      });
     });
   });
 
   // ---- RECボタン ----
-  btnRecord.addEventListener('click', async () => {
+  btnRecord.addEventListener('click', function () {
     if (!Recorder.isRecording()) {
-      Recorder.startRecording(canvas, (time) => {
+      Recorder.startRecording(canvas, function (time) {
         recordTimer.textContent = time;
       });
       btnRecord.textContent = 'STOP';
@@ -180,20 +219,21 @@
       recordTimer.classList.remove('hidden');
     } else {
       btnRecord.disabled = true;
-      await Recorder.stopRecording(currentExercise);
-      btnRecord.textContent = 'REC';
-      btnRecord.classList.remove('recording');
-      btnRecord.disabled = false;
-      recordTimer.classList.add('hidden');
-      recordTimer.textContent = '00:00';
+      Recorder.stopRecording(currentExercise).then(function () {
+        btnRecord.textContent = 'REC';
+        btnRecord.classList.remove('recording');
+        btnRecord.disabled    = false;
+        recordTimer.classList.add('hidden');
+        recordTimer.textContent = '00:00';
+      });
     }
   });
 
   // ---- 戻るボタン ----
-  btnBack.addEventListener('click', async () => {
+  btnBack.addEventListener('click', function () {
     if (Recorder.isRecording()) {
       if (!confirm('録画中です。停止して戻りますか？')) return;
-      await Recorder.stopRecording(currentExercise);
+      Recorder.stopRecording(currentExercise);
     }
 
     if (animationId) {
@@ -205,12 +245,12 @@
     lastKeypoints = null;
 
     btnRecord.textContent = 'REC';
-    btnRecord.classList.remove('recording');
-    btnRecord.disabled = true;
+    btnRecord.className   = '';
+    btnRecord.disabled    = true;
     recordTimer.classList.add('hidden');
     recordTimer.textContent = '00:00';
 
     showScreen('select');
   });
 
-})();
+}());

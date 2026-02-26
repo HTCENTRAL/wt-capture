@@ -243,10 +243,11 @@ button {
 #btn-record:active {
   transform: scale(0.93);
 }
-#btn-record:disabled {
-  background: #333;
-  border-color: rgba(255, 255, 255, 0.3);
-  color: #aaa;
+#btn-record:disabled,
+#btn-record.loading {
+  background: #444;
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #ddd;
   font-size: 11px;
 }
 #btn-record.recording {
